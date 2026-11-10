@@ -1,0 +1,74 @@
+name: Hub release
+
+# Publishes management.html as the latest release so CLIProxyAPI's panel
+# updater (panel-github-repository) installs it. The daily run merges the
+# latest upstream release first; a conflict fails the run for a manual merge.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hub-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      UPSTREAM: router-for-me/Cli-Proxy-API-Management-Center
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge the latest upstream release
+        if: github.event_name != 'push'
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          tag="$(gh api "repos/${UPSTREAM}/releases/latest" --jq .tag_name)"
+          git fetch --no-tags "https://github.com/${UPSTREAM}.git" "refs/tags/${tag}"
+          git merge --no-edit -m "Merge upstream ${tag}" FETCH_HEAD
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.3'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify
+        run: VERSION="hub-$(git rev-parse --short=12 HEAD)" bun run verify
+
+      - name: Push the upstream merge
+        if: github.event_name != 'push'
+        run: git push origin HEAD:main
+
+      - name: Publish release
+        run: |
+          set -euo pipefail
+          tag="hub-$(git rev-parse --short=12 HEAD)"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "$tag already released"
+            exit 0
+          fi
+          mv dist/index.html dist/management.html
+          git log -1 --pretty='%s' > notes.md
+          gh release create "$tag" dist/management.html --target "$(git rev-parse HEAD)" \
+            --title "$tag" --notes-file notes.md --latest
