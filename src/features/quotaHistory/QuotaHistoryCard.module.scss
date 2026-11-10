@@ -1,0 +1,373 @@
+@use '../../styles/variables' as *;
+@use '../../styles/mixins' as *;
+
+.card {
+  // Claude's brand orange; per-account line colors come from palette.ts.
+  --qh-accent: #d97757;
+
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px 18px;
+  border-radius: 14px;
+  border: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--bg-primary) 82%, transparent);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.providerIcon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.providerName {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.muted {
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.iconButton {
+  @include button-reset;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  transition: background-color var(--dur-hover) var(--ease-out-strong);
+
+  &:hover:not(:disabled) {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 1px;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+.serviceForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+}
+
+.serviceLabel {
+  display: flex;
+  flex: 1 1 260px;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.serviceActions {
+  display: flex;
+  gap: 8px;
+}
+
+.hint {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.group,
+.selectGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  max-width: 100%;
+
+  button {
+    @include button-reset;
+
+    padding: 4px 10px;
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    border: 1px solid transparent;
+    border-radius: 8px;
+    transition: color $transition-fast;
+
+    &:hover {
+      color: var(--text-primary);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--primary-color);
+      outline-offset: 1px;
+    }
+
+    &[aria-pressed='true'] {
+      background: var(--floating-surface, var(--bg-primary));
+      border-color: var(--border-hover);
+      color: var(--text-primary);
+    }
+  }
+}
+
+.selectGroup {
+  padding-right: 3px;
+
+  // Select's trigger renders its own surface; shrink it to sit inside the pill.
+  :global(button) {
+    height: 28px;
+    box-shadow: none;
+  }
+}
+
+.groupName {
+  padding: 0 6px 0 8px;
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px 28px;
+}
+
+.big {
+  font-size: 40px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+
+  small {
+    margin-left: 8px;
+    font-size: 14px;
+    font-weight: 400;
+    letter-spacing: 0;
+    color: var(--text-tertiary);
+  }
+}
+
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  margin: 0;
+  min-width: 0;
+}
+
+.stat {
+  min-width: 0;
+
+  dt {
+    font-size: 12.5px;
+    color: var(--text-tertiary);
+  }
+
+  dd {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.notice {
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--warning-text);
+  background: var(--warning-bg);
+}
+
+.chart {
+  position: relative;
+  min-width: 0;
+  width: 100%;
+}
+
+.svg {
+  display: block;
+  max-width: 100%;
+  overflow: visible;
+  touch-action: pan-y;
+}
+
+.grid {
+  stroke: var(--border-color);
+  stroke-width: 1;
+  opacity: 0.7;
+}
+
+.axis {
+  fill: var(--text-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.nowLine {
+  stroke: var(--text-tertiary);
+  stroke-width: 1;
+}
+
+.cursor {
+  stroke: var(--text-tertiary);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  pointer-events: none;
+}
+
+.gain {
+  fill: var(--text-tertiary);
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.ring {
+  fill: var(--bg-primary);
+  stroke: var(--text-primary);
+  stroke-width: 1.5;
+}
+
+.ringText {
+  fill: var(--text-primary);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.tip {
+  position: absolute;
+  top: 8px;
+  z-index: 2;
+  width: 200px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--floating-surface, var(--bg-primary));
+  box-shadow: var(--floating-shadow);
+  font-size: 12px;
+  color: var(--text-primary);
+  pointer-events: none;
+}
+
+.tipTime {
+  margin-bottom: 3px;
+  color: var(--text-tertiary);
+}
+
+.tipRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+
+  b {
+    margin-left: auto;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.tipName {
+  min-width: 0;
+  @include text-ellipsis;
+}
+
+.dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 18px;
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+
+  i {
+    display: inline-block;
+    width: 18px;
+    height: 0;
+    border-top-width: 2px;
+  }
+}
+
+.stale {
+  color: var(--warning-text);
+}
+
+.footnote {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-quaternary);
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 0 2px;
+}
+
+.emptyTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}

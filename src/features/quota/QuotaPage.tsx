@@ -26,6 +26,7 @@ import { ProviderTabs } from '@/features/authFiles/components/ProviderTabs';
 import { QuotaHeader } from './components/QuotaHeader';
 import { QuotaCard } from './components/QuotaCard';
 import { QuotaTimeline } from './components/QuotaTimeline';
+import { QuotaHistoryCard } from '@/features/quotaHistory/QuotaHistoryCard';
 import {
   CARD_ENTRANCE_BUDGET_MS,
   QUOTA_PAGE_SIZE,
@@ -345,6 +346,8 @@ export function QuotaPage() {
             onChange={handleTabChange}
           />
         </div>
+
+        <QuotaHistoryCard active={tab === 'all' || tab === 'claude'} refreshing={loading} />
 
         <div className={styles.toolbar}>
           <div className={styles.search}>
