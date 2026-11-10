@@ -1,5 +1,16 @@
 import { describe, expect, test } from 'bun:test';
-import { buildChartModel, DEFAULT_SETTINGS, sanitizeSettings } from '../src/features/quotaHistory/chartModel';
+import {
+  buildChartModel,
+  DEFAULT_SETTINGS,
+  sanitizeSettings,
+  toggleLimit,
+} from '../src/features/quotaHistory/chartModel';
+import {
+  GAIN_TRIES,
+  placeLabels,
+  textBox,
+  textWidth,
+} from '../src/features/quotaHistory/labelLayout';
 import {
   DAY,
   HOUR,
@@ -142,7 +153,7 @@ describe('drained and burnRate', () => {
     const accounts = [account('A', { Weekly: [[now - 600, 20, now + WEEK / 2]] })];
     const burn = burnRate(accounts, 'Weekly', 3, now);
     expect(burn.source).toBe('weekAverage');
-    expect(burn.rate).toBeCloseTo(20 / ((WEEK / 2) / HOUR), 6);
+    expect(burn.rate).toBeCloseTo(20 / (WEEK / 2 / HOUR), 6);
   });
 
   test('has no fallback for limits without a period', () => {
@@ -221,10 +232,14 @@ describe('buildChartModel', () => {
   ];
 
   test('pools weekly remaining and projects it', () => {
-    const model = buildChartModel({ accounts, now, settings: DEFAULT_SETTINGS });
+    const model = buildChartModel({
+      accounts,
+      now,
+      settings: { ...DEFAULT_SETTINGS, limits: ['Weekly'] },
+    });
     expect(model.accountCount).toBe(2);
     expect(model.yMax).toBe(200);
-    expect(model.current).toBe(125);
+    expect(model.limits.map((l) => [l.label, l.current])).toEqual([['Weekly', 125]]);
     expect(model.series.map((s) => s.role)).toEqual(['recorded', 'projected']);
     expect(model.x1).toBe(now + WEEK);
   });
@@ -233,17 +248,189 @@ describe('buildChartModel', () => {
     const model = buildChartModel({
       accounts,
       now,
-      settings: { ...DEFAULT_SETTINGS, limit: '5-hour' },
+      settings: { ...DEFAULT_SETTINGS, limits: ['5-hour'] },
     });
-    expect(model.projection).toBeNull();
+    expect(model.limits[0].projection).toBeNull();
     expect(model.series.map((s) => s.role)).toEqual(['recorded']);
   });
 
   test('keeps stored settings only when valid for the reported limits', () => {
     expect(limitLabels(accounts)).toEqual(['Weekly', '5-hour']);
-    const settings = sanitizeSettings({ limit: 'Weekly · Gone', burnHours: 6, view: 'nope' }, accounts);
-    expect(settings.limit).toBe('Weekly');
+    const settings = sanitizeSettings(
+      { limits: ['Weekly · Gone'], burnHours: 6, view: 'nope' },
+      accounts
+    );
+    expect(settings.limits).toEqual(['Weekly']);
     expect(settings.burnHours).toBe(6);
     expect(settings.view).toBe('pool');
+  });
+});
+
+describe('several limits', () => {
+  const now = 3_000_000;
+  const both = [
+    account('A', {
+      Weekly: [
+        [now - 2 * HOUR, 20, now + DAY],
+        [now, 25, now + DAY],
+      ],
+      'Weekly · Fable': [
+        [now - 2 * HOUR, 40, now + 2 * DAY],
+        [now, 60, now + 2 * DAY],
+      ],
+      '5-hour': [[now, 10, now + 2 * HOUR]],
+    }),
+    account('B', {
+      Weekly: [[now, 50, now + 2 * DAY]],
+      'Weekly · Fable': [[now, 10, now + 3 * DAY]],
+    }),
+  ];
+  const settings = { ...DEFAULT_SETTINGS, limits: ['Weekly', 'Weekly · Fable'] };
+
+  test('defaults to Weekly and Weekly · Fable, falling back to the first label', () => {
+    expect(sanitizeSettings(null, both).limits).toEqual(['Weekly', 'Weekly · Fable']);
+    const onlyFive = [account('A', { '5-hour': [[1, 1, null]] })];
+    expect(sanitizeSettings(null, onlyFive).limits).toEqual(['5-hour']);
+    const noFable = [account('A', { '5-hour': [[1, 1, null]], Weekly: [[1, 1, null]] })];
+    expect(sanitizeSettings(null, noFable).limits).toEqual(['Weekly']);
+  });
+
+  test('migrates the old single limit and drops unknown labels', () => {
+    expect(sanitizeSettings({ limit: '5-hour' }, both).limits).toEqual(['5-hour']);
+    expect(sanitizeSettings({ limit: 'Gone' }, both).limits).toEqual(['Weekly', 'Weekly · Fable']);
+    expect(sanitizeSettings({ limits: ['Weekly · Fable', 'Gone', 'Weekly'] }, both).limits).toEqual(
+      ['Weekly', 'Weekly · Fable']
+    );
+    expect(sanitizeSettings({ limits: [] }, both).limits).toEqual(['Weekly', 'Weekly · Fable']);
+  });
+
+  test('toggling keeps at least one limit and the reported order', () => {
+    const labels = limitLabels(both);
+    expect(toggleLimit(['Weekly'], 'Weekly', labels)).toEqual(['Weekly']);
+    expect(toggleLimit(['Weekly'], 'Weekly · Fable', labels)).toEqual(['Weekly', 'Weekly · Fable']);
+    expect(toggleLimit(['Weekly', 'Weekly · Fable'], 'Weekly', labels)).toEqual(['Weekly · Fable']);
+    expect(toggleLimit(['Weekly', 'Weekly · Fable'], '5-hour', labels)).toEqual([
+      'Weekly',
+      '5-hour',
+      'Weekly · Fable',
+    ]);
+  });
+
+  test('pool view draws one recorded and projected line per limit, each with its own color', () => {
+    const model = buildChartModel({ accounts: both, now, settings });
+    expect(model.limits.map((l) => [l.label, l.current])).toEqual([
+      ['Weekly', 125],
+      ['Weekly · Fable', 130],
+    ]);
+    expect(model.series.map((s) => [s.limit, s.role])).toEqual([
+      ['Weekly', 'recorded'],
+      ['Weekly', 'projected'],
+      ['Weekly · Fable', 'recorded'],
+      ['Weekly · Fable', 'projected'],
+    ]);
+    const colors = model.series.map((s) => s.color);
+    expect(colors[0]).toBe(colors[1]);
+    expect(colors[2]).toBe(colors[3]);
+    expect(colors[0]).not.toBe(colors[2]);
+    expect(model.series.some((s) => s.area)).toBe(false);
+    expect(model.yMax).toBe(200);
+    const gainLimits = new Set(model.annotations.map((a) => a.limit));
+    expect(gainLimits).toEqual(new Set(['Weekly', 'Weekly · Fable']));
+  });
+
+  test('accounts view tells limits apart by color and accounts by opacity', () => {
+    const model = buildChartModel({
+      accounts: both,
+      now,
+      settings: { ...settings, view: 'accounts' },
+    });
+    const recorded = model.series.filter((s) => s.role === 'account');
+    expect(recorded.map((s) => [s.limit, s.name])).toEqual([
+      ['Weekly', 'A'],
+      ['Weekly', 'B'],
+      ['Weekly · Fable', 'A'],
+      ['Weekly · Fable', 'B'],
+    ]);
+    expect(recorded[0].color).toBe(recorded[1].color);
+    expect(recorded[0].color).not.toBe(recorded[2].color);
+    expect(recorded[0].opacity).toBe(1);
+    expect(recorded[1].opacity).toBeLessThan(1);
+    const dashed = model.series.filter((s) => s.dashed);
+    expect(dashed).toHaveLength(4);
+    expect(dashed.every((s) => s.hideLegend)).toBe(true);
+  });
+
+  test('a single limit keeps each account its own color', () => {
+    const model = buildChartModel({
+      accounts: both,
+      now,
+      settings: { ...settings, limits: ['Weekly'], view: 'accounts' },
+    });
+    const recorded = model.series.filter((s) => s.role === 'account');
+    expect(recorded[0].color).not.toBe(recorded[1].color);
+    expect(recorded.every((s) => s.opacity === undefined)).toBe(true);
+  });
+
+  test('keeps a projection only for limits with a period, and the horizon follows', () => {
+    const model = buildChartModel({
+      accounts: both,
+      now,
+      settings: { ...settings, limits: ['Weekly', '5-hour'] },
+    });
+    expect(model.limits.map((l) => l.projection != null)).toEqual([true, false]);
+    expect(model.x1).toBe(now + WEEK);
+    expect(model.series.filter((s) => s.limit === '5-hour').map((s) => s.role)).toEqual([
+      'recorded',
+    ]);
+  });
+
+  test('drain view plots every selected limit on one scale', () => {
+    const model = buildChartModel({
+      accounts: both,
+      now,
+      settings: { ...settings, metric: 'drain' },
+    });
+    expect(model.unit).toBe('%/h');
+    expect(model.series.filter((s) => s.role === 'drain').map((s) => s.limit)).toEqual([
+      'Weekly',
+      'Weekly · Fable',
+    ]);
+    expect(model.limits.every((l) => l.burn.rate >= 0)).toBe(true);
+  });
+});
+
+describe('placeLabels', () => {
+  const bounds = { minX: 0, maxX: 400 };
+  const spec = (x: number, y: number) => ({
+    x,
+    y,
+    width: textWidth('+100%', 11),
+    size: 11,
+    tries: GAIN_TRIES,
+  });
+
+  test('moves a label off the "Now" caption instead of printing over it', () => {
+    const now = textBox(100, 14, textWidth('Now', 11), 11, 'middle');
+    const [placed] = placeLabels([spec(102, 24)], [now], bounds);
+    expect(placed).not.toBeNull();
+    const box = textBox(placed!.x, placed!.y, textWidth('+100%', 11), 11, placed!.anchor);
+    expect(box.y1 < now.y0 || box.y0 > now.y1 || box.x0 > now.x1 || box.x1 < now.x0).toBe(true);
+  });
+
+  test('stacks labels that share a spot and drops the ones with no room', () => {
+    const placed = placeLabels([spec(200, 60), spec(200, 60), spec(200, 60)], [], bounds);
+    expect(placed.map((p) => p?.y)).toEqual([53, 36, 74]);
+    const crowded = placeLabels(
+      [spec(200, 60), spec(200, 60), spec(200, 60), spec(200, 60), spec(200, 60)],
+      [],
+      bounds
+    );
+    expect(crowded.filter(Boolean).length).toBeLessThan(5);
+    expect(crowded.at(-1)).toBeNull();
+  });
+
+  test('keeps labels inside the chart bounds', () => {
+    const [placed] = placeLabels([spec(395, 60)], [], bounds);
+    expect(placed?.anchor).toBe('end');
   });
 });

@@ -2,12 +2,20 @@ import { useEffect, useId, useMemo, useRef, useState, type PointerEvent } from '
 import { useTranslation } from 'react-i18next';
 import { xTicks, type ChartModel, type ChartSeries } from './chartModel';
 import { formatDay, formatTime, formatWhen, limitDisplayName, seriesDisplayName } from './format';
+import {
+  GAIN_TRIES,
+  RING_TRIES,
+  placeLabels,
+  textBox,
+  textWidth,
+  type Anchor,
+  type LabelSpec,
+} from './labelLayout';
 import { interp } from './model';
 import styles from './QuotaHistoryCard.module.scss';
 
 const MARGIN = { l: 48, r: 14, t: 24, b: 28 };
 const MIN_TICK_GAP = 52;
-const MIN_LABEL_GAP = 34;
 
 interface Props {
   model: ChartModel;
@@ -40,6 +48,7 @@ export function QuotaHistoryChart({ model, locale }: Props) {
   const width = Math.max(260, measured);
   const height = width < 560 ? 230 : 300;
   const { x0, x1, yMax, unit, now } = model;
+  const multi = model.limits.length > 1;
 
   const plot = useMemo(() => {
     const x = (time: number) =>
@@ -79,42 +88,66 @@ export function QuotaHistoryChart({ model, locale }: Props) {
         : null;
       return { line, area, series, index };
     });
-    const nowValue = model.series[0] ? interp(model.series[0].pts, now) : null;
-    let lastLabelX = -Infinity;
+    const nowDots = model.series
+      .filter((series) => !series.dashed)
+      .map((series) => ({ series, value: interp(series.pts, now) }))
+      .filter((dot): dot is { series: ChartSeries; value: number } => dot.value != null)
+      .map(({ series, value }) => ({ x: x(now), y: y(value), series }));
+
+    const inRange = [...model.annotations]
+      .filter((a) => a.t >= x0 && a.t <= x1)
+      .sort((p, q) => p.t - q.t);
+    const empties = inRange.filter((a) => a.kind === 'empty');
+    const emptyTexts = empties.map((a) => {
+      const text = t('quota_history.empty_when', { when: formatWhen(a.t, now, locale, t) });
+      return multi ? `${limitDisplayName(a.limit, t)} · ${text}` : text;
+    });
+    const gains = inRange.filter((a) => a.kind === 'gain');
+    const nowText = t('quota_history.now');
+    const obstacles = [
+      textBox(x(now), MARGIN.t - 10, textWidth(nowText, 11), 11, 'middle'),
+      ...empties.map((a) => ({ x0: x(a.t) - 6, x1: x(a.t) + 6, y0: y(a.v) - 6, y1: y(a.v) + 6 })),
+    ];
+    const specs: LabelSpec[] = [
+      ...empties.map((a, i): LabelSpec => ({
+        x: x(a.t),
+        y: y(a.v),
+        width: textWidth(emptyTexts[i], 12),
+        size: 12,
+        tries: RING_TRIES,
+      })),
+      ...gains.map((a): LabelSpec => ({
+        x: x(a.t),
+        y: y(a.v),
+        width: textWidth(`+${Math.round(a.gain ?? 0)}%`, 11),
+        size: 11,
+        tries: GAIN_TRIES,
+      })),
+    ];
+    const placed = placeLabels(specs, obstacles, { minX: 0, maxX: width });
     const labels: {
       x: number;
       y: number;
       text: string;
       ring: boolean;
       color?: string;
-      anchor: 'start' | 'middle' | 'end';
+      anchor: Anchor;
+      ringX?: number;
+      ringY?: number;
     }[] = [];
-    for (const a of [...model.annotations]
-      .filter((n) => n.t >= x0 && n.t <= x1)
-      .sort((p, q) => p.t - q.t)) {
-      const ax = x(a.t);
-      if (a.kind === 'empty') {
-        const edge = width - MARGIN.r - 90;
-        labels.push({
-          x: ax,
-          y: y(a.v),
-          text: t('quota_history.empty_when', { when: formatWhen(a.t, now, locale, t) }),
-          ring: true,
-          anchor: ax > edge ? 'end' : 'middle',
-        });
-        continue;
-      }
-      if (ax - lastLabelX < MIN_LABEL_GAP) continue;
-      lastLabelX = ax;
+    [...empties, ...gains].forEach((a, i) => {
+      const spot = placed[i];
+      if (!spot) return;
+      const ring = a.kind === 'empty';
       labels.push({
-        x: ax,
-        y: y(a.v),
-        text: `+${Math.round(a.gain ?? 0)}%`,
-        ring: false,
+        ...spot,
+        text: ring ? emptyTexts[i] : `+${Math.round(a.gain ?? 0)}%`,
+        ring,
         color: a.color,
-        anchor: 'middle',
+        ringX: x(a.t),
+        ringY: y(a.v),
       });
-    }
+    });
     return {
       x,
       y,
@@ -122,9 +155,10 @@ export function QuotaHistoryChart({ model, locale }: Props) {
       ticks,
       paths,
       labels,
-      now: { x: x(now), y: nowValue == null ? null : y(nowValue) },
+      nowX: x(now),
+      nowDots,
     };
-  }, [model, x0, x1, yMax, unit, now, width, height, locale, t]);
+  }, [model, multi, x0, x1, yMax, unit, now, width, height, locale, t]);
 
   const onMove = (event: PointerEvent<SVGSVGElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -157,7 +191,7 @@ export function QuotaHistoryChart({ model, locale }: Props) {
         height={height}
         role="img"
         aria-label={t('quota_history.chart_label', {
-          label: limitDisplayName(model.label, t),
+          label: model.limits.map((limit) => limitDisplayName(limit.label, t)).join(', '),
         })}
         onPointerMove={onMove}
         onPointerDown={onMove}
@@ -216,33 +250,42 @@ export function QuotaHistoryChart({ model, locale }: Props) {
                 strokeWidth={1.8}
                 strokeLinejoin="round"
                 strokeDasharray={series.dashed ? '5 4' : undefined}
+                opacity={series.opacity}
               />
             </g>
           );
         })}
         <line
           className={styles.nowLine}
-          x1={plot.now.x}
-          x2={plot.now.x}
+          x1={plot.nowX}
+          x2={plot.nowX}
           y1={MARGIN.t - 6}
           y2={height - MARGIN.b}
         />
-        <text className={styles.axis} x={plot.now.x} y={MARGIN.t - 10} textAnchor="middle">
+        <text className={styles.axis} x={plot.nowX} y={MARGIN.t - 10} textAnchor="middle">
           {t('quota_history.now')}
         </text>
-        {plot.now.y != null && model.series[0] && (
-          <circle cx={plot.now.x} cy={plot.now.y} r={3.5} fill={model.series[0].color} />
-        )}
+        {plot.nowDots.map((dot, i) => (
+          <circle
+            key={i}
+            cx={dot.x}
+            cy={dot.y}
+            r={3.5}
+            fill={dot.series.color}
+            opacity={dot.series.opacity}
+          />
+        ))}
         {plot.labels.map((label, i) =>
           label.ring ? (
             <g key={i}>
-              <circle className={styles.ring} cx={label.x} cy={label.y} r={5} />
-              <text
-                className={styles.ringText}
-                x={label.x}
-                y={label.y - 10}
-                textAnchor={label.anchor}
-              >
+              <circle
+                className={styles.ring}
+                cx={label.ringX}
+                cy={label.ringY}
+                r={5}
+                style={label.color ? { stroke: label.color } : undefined}
+              />
+              <text className={styles.ringText} x={label.x} y={label.y} textAnchor={label.anchor}>
                 {label.text}
               </text>
             </g>
@@ -251,7 +294,7 @@ export function QuotaHistoryChart({ model, locale }: Props) {
               key={i}
               className={styles.gain}
               x={label.x}
-              y={label.y - 7}
+              y={label.y}
               textAnchor={label.anchor}
               fill={label.color}
             >
@@ -278,7 +321,7 @@ export function QuotaHistoryChart({ model, locale }: Props) {
           {tooltipRows.map(({ series, v }, i) => (
             <div key={i} className={styles.tipRow}>
               <span className={styles.dot} style={{ background: series.color }} />
-              <span className={styles.tipName}>{seriesDisplayName(series, t)}</span>
+              <span className={styles.tipName}>{seriesDisplayName(series, t, multi)}</span>
               <b>
                 {v.toFixed(1)}
                 {unit}

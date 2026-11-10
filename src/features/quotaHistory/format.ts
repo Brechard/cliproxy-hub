@@ -49,9 +49,50 @@ export const limitDisplayName = (label: string, translate: TFunction): string =>
   return label;
 };
 
-export const seriesDisplayName = (series: ChartSeries, translate: TFunction): string => {
+/** With several limits on one chart, a line is named after its limit (and account). */
+export const seriesDisplayName = (
+  series: ChartSeries,
+  translate: TFunction,
+  multi = false
+): string => {
+  if (multi) {
+    const limit = limitDisplayName(series.limit, translate);
+    return series.name ? `${series.name} · ${limit}` : limit;
+  }
   if (series.role === 'recorded') return translate(`${KEY}legend_recorded`);
   if (series.role === 'drain') return translate(`${KEY}legend_drain`);
   if (series.role === 'projected' && !series.name) return translate(`${KEY}legend_projected`);
   return series.name ?? '';
+};
+
+export interface LegendItem {
+  color: string;
+  dashed: boolean;
+  opacity?: number;
+  text: string;
+}
+
+/** One entry per solid line, plus a single dashed "Projected" entry once limits share the chart. */
+export const legendItems = (
+  series: readonly ChartSeries[],
+  multi: boolean,
+  translate: TFunction
+): LegendItem[] => {
+  const items = series
+    .filter((s) => !s.hideLegend && !(multi && s.role === 'projected'))
+    .map((s) => ({
+      color: s.color,
+      dashed: Boolean(s.dashed),
+      opacity: s.opacity,
+      text: seriesDisplayName(s, translate, multi),
+    }));
+  if (multi && series.some((s) => s.role === 'projected')) {
+    items.push({
+      color: 'var(--text-tertiary)',
+      dashed: true,
+      opacity: undefined,
+      text: translate(`${KEY}legend_projected`),
+    });
+  }
+  return items;
 };

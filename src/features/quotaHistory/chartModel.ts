@@ -12,7 +12,7 @@ import {
   rateSeries,
   remainingPoints,
 } from './model';
-import { accountColor } from './palette';
+import { accountColor, accountOpacity, limitColor } from './palette';
 import type {
   AccountState,
   BurnRate,
@@ -33,7 +33,8 @@ export type View = (typeof VIEWS)[number];
 export type FutureFactor = (typeof FUTURE_FACTORS)[number];
 
 export interface ChartSettings {
-  limit: string;
+  /** Selected limit labels, never empty, in the order `limitLabels` reports them. */
+  limits: string[];
   metric: Metric;
   view: View;
   burnHours: number;
@@ -41,8 +42,10 @@ export interface ChartSettings {
   historyDays: number;
 }
 
+export const DEFAULT_LIMITS = ['Weekly', 'Weekly · Fable'] as const;
+
 export const DEFAULT_SETTINGS: ChartSettings = {
-  limit: 'Weekly',
+  limits: [...DEFAULT_LIMITS],
   metric: 'remaining',
   view: 'pool',
   burnHours: 3,
@@ -54,6 +57,8 @@ export type SeriesRole = 'recorded' | 'projected' | 'drain' | 'account';
 
 export interface ChartSeries {
   role: SeriesRole;
+  /** Limit this line belongs to. */
+  limit: string;
   /** Account name for role 'account' and for projected account lines. */
   name: string | null;
   color: string;
@@ -61,19 +66,32 @@ export interface ChartSeries {
   area?: boolean;
   dashed?: boolean;
   hideLegend?: boolean;
+  opacity?: number;
 }
 
 export interface ChartAnnotation {
   t: number;
   v: number;
   kind: 'gain' | 'empty';
+  limit: string;
   gain?: number;
   color?: string;
 }
 
-export interface ChartModel {
+export interface LimitModel {
   label: string;
+  color: string;
   period: number | null;
+  accountCount: number;
+  states: AccountState[];
+  current: number;
+  burn: BurnRate;
+  projection: Projection | null;
+}
+
+export interface ChartModel {
+  limits: LimitModel[];
+  /** Accounts with a reading in at least one selected limit. */
   accountCount: number;
   now: number;
   x0: number;
@@ -82,10 +100,6 @@ export interface ChartModel {
   unit: '%' | '%/h';
   series: ChartSeries[];
   annotations: ChartAnnotation[];
-  states: AccountState[];
-  current: number;
-  burn: BurnRate;
-  projection: Projection | null;
 }
 
 export const POOL_COLOR = 'var(--qh-accent)';
@@ -97,100 +111,178 @@ export interface BuildInput {
 }
 
 export function buildChartModel({ accounts, now, settings }: BuildInput): ChartModel {
-  const { limit: label, burnHours, historyDays } = settings;
+  const { limits: selected, burnHours, historyDays } = settings;
   const factor = Number(settings.future);
-  const period = periodFor(label);
-  const lines: Line[] = [];
-  accounts.forEach((account, index) => {
-    const series = account.series[label];
-    if (series?.length) {
-      lines.push({
-        name: account.name,
-        color: accountColor(index),
-        pts: remainingPoints(series),
-      });
-    }
-  });
-  const n = lines.length;
+  const multi = selected.length > 1;
+  const labels = limitLabels(accounts);
   const x0 = now - historyDays * DAY;
-  // Without a period there is no projection, so the 5-hour view only needs a sliver of future.
-  const x1 = period ? now + WEEK : now + HOUR;
-  const burn = burnRate(accounts, label, burnHours, now);
-  const states = latestState(accounts, label, now, accountColor);
-  const projection = period ? project(states, period, burn.rate * factor, now, x1) : null;
-  const pool = poolLine(lines);
+  // Without a period there is no projection, so a 5-hour-only view needs just a sliver of future.
+  const x1 = selected.some((label) => periodFor(label)) ? now + WEEK : now + HOUR;
+
+  const perLimit = selected.map((label) => {
+    const period = periodFor(label);
+    const color = limitColor(label, labels);
+    const entries: Array<{ index: number; line: Line }> = [];
+    accounts.forEach((account, index) => {
+      const series = account.series[label];
+      if (series?.length) {
+        entries.push({
+          index,
+          line: { name: account.name, color: accountColor(index), pts: remainingPoints(series) },
+        });
+      }
+    });
+    const burn = burnRate(accounts, label, burnHours, now);
+    const states = latestState(accounts, label, now, accountColor);
+    const projection = period ? project(states, period, burn.rate * factor, now, x1) : null;
+    const lines = entries.map((entry) => entry.line);
+    return { label, period, color, entries, lines, burn, states, projection };
+  });
+
   const series: ChartSeries[] = [];
   const annotations: ChartAnnotation[] = [];
   let yMax: number;
   let unit: ChartModel['unit'] = '%';
 
   if (settings.metric === 'drain') {
-    const pts = rateSeries(accounts, label, burnHours, x0, now);
-    const projected = burn.rate * factor;
-    yMax = niceMax(Math.max(1, projected, ...pts.map((p) => p.v)) * 1.15);
+    const drains = perLimit.map((l) => ({
+      ...l,
+      pts: rateSeries(accounts, l.label, burnHours, x0, now),
+      projected: l.burn.rate * factor,
+    }));
+    yMax = niceMax(
+      Math.max(1, ...drains.flatMap((l) => [l.projected, ...l.pts.map((p) => p.v)])) * 1.15
+    );
     unit = '%/h';
-    series.push({ role: 'drain', name: null, color: POOL_COLOR, pts, area: true });
-    if (projection) {
+    for (const l of drains) {
       series.push({
-        role: 'projected',
+        role: 'drain',
+        limit: l.label,
         name: null,
-        color: POOL_COLOR,
-        pts: [
-          { t: now, v: projected },
-          { t: x1, v: projected },
-        ],
-        dashed: true,
+        color: multi ? l.color : POOL_COLOR,
+        pts: l.pts,
+        area: !multi,
       });
+      if (l.projection) {
+        series.push({
+          role: 'projected',
+          limit: l.label,
+          name: null,
+          color: multi ? l.color : POOL_COLOR,
+          pts: [
+            { t: now, v: l.projected },
+            { t: x1, v: l.projected },
+          ],
+          dashed: true,
+        });
+      }
     }
   } else if (settings.view === 'pool') {
-    yMax = Math.max(100, n * 100);
-    series.push({ role: 'recorded', name: null, color: POOL_COLOR, pts: pool.pts, area: true });
-    if (projection) {
+    yMax = Math.max(100, ...perLimit.map((l) => l.lines.length * 100));
+    for (const l of perLimit) {
+      const color = multi ? l.color : POOL_COLOR;
+      const pool = poolLine(l.lines);
       series.push({
-        role: 'projected',
+        role: 'recorded',
+        limit: l.label,
         name: null,
-        color: POOL_COLOR,
-        pts: projection.pool,
-        dashed: true,
-        area: true,
+        color,
+        pts: pool.pts,
+        area: !multi,
       });
-    }
-    const gains = pool.gains.concat(projection ? projection.gains : []);
-    for (const g of gains) {
-      if (g.gain >= 1) annotations.push({ t: g.t, v: g.v, kind: 'gain', gain: g.gain });
-    }
-    if (projection?.poolEmpty) {
-      annotations.push({ t: projection.poolEmpty, v: 0, kind: 'empty' });
+      if (l.projection) {
+        series.push({
+          role: 'projected',
+          limit: l.label,
+          name: null,
+          color,
+          pts: l.projection.pool,
+          dashed: true,
+          area: !multi,
+        });
+      }
+      const gains = pool.gains.concat(l.projection ? l.projection.gains : []);
+      for (const g of gains) {
+        if (g.gain >= 1) {
+          annotations.push({
+            t: g.t,
+            v: g.v,
+            kind: 'gain',
+            limit: l.label,
+            gain: g.gain,
+            color: multi ? l.color : undefined,
+          });
+        }
+      }
+      if (l.projection?.poolEmpty) {
+        annotations.push({
+          t: l.projection.poolEmpty,
+          v: 0,
+          kind: 'empty',
+          limit: l.label,
+          color: multi ? l.color : undefined,
+        });
+      }
     }
   } else {
     yMax = 100;
-    for (const line of lines) {
-      series.push({ role: 'account', name: line.name, color: line.color, pts: line.pts });
-    }
-    if (projection) {
-      for (const acc of projection.accs) {
+    for (const l of perLimit) {
+      // One limit keeps each account's own color; several limits take the limit's color
+      // and fade by account position instead.
+      const paint = (index: number, own: string) =>
+        multi ? { color: l.color, opacity: accountOpacity(index) } : { color: own };
+      for (const { index, line } of l.entries) {
+        series.push({
+          role: 'account',
+          limit: l.label,
+          name: line.name,
+          pts: line.pts,
+          ...paint(index, line.color),
+        });
+      }
+      if (!l.projection) continue;
+      for (const acc of l.projection.accs) {
+        const index = accounts.findIndex((account) => account.name === acc.name);
+        const style = paint(index, acc.color);
         series.push({
           role: 'projected',
+          limit: l.label,
           name: acc.name,
-          color: acc.color,
           pts: acc.pts,
           dashed: true,
           hideLegend: true,
+          ...style,
         });
         for (let i = 1; i < acc.pts.length; i++) {
           const p = acc.pts[i - 1];
           const q = acc.pts[i];
           if (p.t === q.t && q.v - p.v >= 1) {
-            annotations.push({ t: q.t, v: q.v, kind: 'gain', gain: q.v - p.v, color: acc.color });
+            annotations.push({
+              t: q.t,
+              v: q.v,
+              kind: 'gain',
+              limit: l.label,
+              gain: q.v - p.v,
+              color: style.color,
+            });
           }
         }
       }
     }
   }
   return {
-    label,
-    period,
-    accountCount: n,
+    limits: perLimit.map((l) => ({
+      label: l.label,
+      color: l.color,
+      period: l.period,
+      accountCount: l.lines.length,
+      states: l.states,
+      current: l.states.reduce((sum, s) => sum + s.rem, 0),
+      burn: l.burn,
+      projection: l.projection,
+    })),
+    accountCount: accounts.filter((account) => selected.some((l) => account.series[l]?.length))
+      .length,
     now,
     x0,
     x1,
@@ -198,12 +290,31 @@ export function buildChartModel({ accounts, now, settings }: BuildInput): ChartM
     unit,
     series,
     annotations,
-    states,
-    current: states.reduce((sum, s) => sum + s.rem, 0),
-    burn,
-    projection,
   };
 }
+
+/** Pick the default selection: Weekly and Weekly · Fable where reported, else the first label. */
+export const defaultLimits = (labels: readonly string[]): string[] => {
+  const picked = labels.filter((label) => (DEFAULT_LIMITS as readonly string[]).includes(label));
+  return picked.length ? picked : labels.slice(0, 1);
+};
+
+/** Keep the stored selection that the service still reports; the old single `limit` counts as one. */
+export const sanitizeLimits = (raw: unknown, labels: readonly string[]): string[] => {
+  const wanted = Array.isArray(raw) ? raw : [raw];
+  const picked = labels.filter((label) => wanted.includes(label));
+  return picked.length ? picked : defaultLimits(labels);
+};
+
+/** Toggle one limit in the selection; the last selected limit cannot be removed. */
+export const toggleLimit = (
+  selected: readonly string[],
+  label: string,
+  labels: readonly string[]
+): string[] => {
+  if (!selected.includes(label)) return labels.filter((l) => l === label || selected.includes(l));
+  return selected.length > 1 ? selected.filter((l) => l !== label) : [...selected];
+};
 
 /** Keep stored settings valid for the labels the service actually reports. */
 export function sanitizeSettings(raw: unknown, accounts: readonly HistoryAccount[]): ChartSettings {
@@ -212,11 +323,7 @@ export function sanitizeSettings(raw: unknown, accounts: readonly HistoryAccount
   const pick = <T>(value: unknown, allowed: readonly T[], fallback: T): T =>
     allowed.includes(value as T) ? (value as T) : fallback;
   return {
-    limit: pick(
-      source.limit,
-      labels,
-      labels.includes(DEFAULT_SETTINGS.limit) ? 'Weekly' : labels[0]
-    ),
+    limits: sanitizeLimits(source.limits ?? source.limit, labels),
     metric: pick(source.metric, METRICS, DEFAULT_SETTINGS.metric),
     view: pick(source.view, VIEWS, DEFAULT_SETTINGS.view),
     burnHours: pick(source.burnHours, BURN_HOURS, DEFAULT_SETTINGS.burnHours),

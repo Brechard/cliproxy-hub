@@ -13,6 +13,7 @@ import {
   HISTORY_DAYS,
   buildChartModel,
   sanitizeSettings,
+  toggleLimit,
   type ChartSettings,
   type FutureFactor,
   type Metric,
@@ -22,11 +23,12 @@ import {
   formatDuration,
   formatMonthDay,
   formatWhen,
+  legendItems,
   limitDisplayName,
-  seriesDisplayName,
 } from './format';
 import './i18n';
 import { limitLabels } from './model';
+import { limitColor } from './palette';
 import { QuotaHistoryChart } from './QuotaHistoryChart';
 import {
   readServiceUrlOverride,
@@ -50,8 +52,10 @@ const STALE_AFTER_SECONDS = 15 * 60;
 interface SegmentedProps<T extends string> {
   label?: string;
   ariaLabel: string;
-  value: T;
-  options: ReadonlyArray<{ value: T; label: string }>;
+  /** Pressed option; a multi-select picker passes `values` instead. */
+  value?: T;
+  values?: readonly T[];
+  options: ReadonlyArray<{ value: T; label: string; color?: string }>;
   onChange: (value: T) => void;
 }
 
@@ -59,6 +63,7 @@ function Segmented<T extends string>({
   label,
   ariaLabel,
   value,
+  values,
   options,
   onChange,
 }: SegmentedProps<T>) {
@@ -69,9 +74,10 @@ function Segmented<T extends string>({
         <button
           key={option.value}
           type="button"
-          aria-pressed={value === option.value}
+          aria-pressed={values ? values.includes(option.value) : value === option.value}
           onClick={() => onChange(option.value)}
         >
+          {option.color && <i className={styles.swatch} style={{ background: option.color }} />}
           {option.label}
         </button>
       ))}
@@ -253,55 +259,59 @@ export function QuotaHistoryCard({ active, refreshing }: Props) {
     );
   }
 
-  const { burn, projection } = model;
+  const multi = model.limits.length > 1;
   const horizon = formatMonthDay(model.x1, locale);
   const when = (time: number) => formatWhen(time, model.now, locale, t);
-  const stats: Array<[string, string]> = [];
-  const next = model.states
-    .filter((state) => state.reset && state.reset > model.now)
-    .sort((a, b) => (a.reset ?? 0) - (b.reset ?? 0))[0];
-  if (projection) {
-    stats.push([
-      t('quota_history.stat_pool_empty'),
-      projection.poolEmpty
-        ? when(projection.poolEmpty)
-        : t('quota_history.not_by', { date: horizon }),
-    ]);
-    stats.push([
-      t('quota_history.stat_first_empty'),
-      projection.firstEmpty
-        ? t('quota_history.first_empty_value', {
-            name: projection.firstEmpty.name,
-            in: formatDuration(projection.firstEmpty.t - model.now, t),
-          })
-        : t('quota_history.none_by', { date: horizon }),
-    ]);
-    if (next && next.reset) {
+  const rows = model.limits.map((limit) => {
+    const { burn, projection } = limit;
+    const stats: Array<[string, string]> = [];
+    const next = limit.states
+      .filter((state) => state.reset && state.reset > model.now)
+      .sort((a, b) => (a.reset ?? 0) - (b.reset ?? 0))[0];
+    if (projection) {
+      stats.push([
+        t('quota_history.stat_pool_empty'),
+        projection.poolEmpty
+          ? when(projection.poolEmpty)
+          : t('quota_history.not_by', { date: horizon }),
+      ]);
+      stats.push([
+        t('quota_history.stat_first_empty'),
+        projection.firstEmpty
+          ? t('quota_history.first_empty_value', {
+              name: projection.firstEmpty.name,
+              in: formatDuration(projection.firstEmpty.t - model.now, t),
+            })
+          : t('quota_history.none_by', { date: horizon }),
+      ]);
+      if (next && next.reset) {
+        stats.push([
+          t('quota_history.stat_next_reset'),
+          t('quota_history.next_reset_gain', {
+            gain: Math.round(100 - next.rem),
+            when: when(next.reset),
+          }),
+        ]);
+      }
+    } else {
       stats.push([
         t('quota_history.stat_next_reset'),
-        t('quota_history.next_reset_gain', {
-          gain: Math.round(100 - next.rem),
-          when: when(next.reset),
-        }),
+        next && next.reset
+          ? t('quota_history.next_reset_account', { name: next.name, when: when(next.reset) })
+          : t('quota_history.no_window'),
       ]);
     }
-  } else {
-    stats.push([
-      t('quota_history.stat_next_reset'),
-      next && next.reset
-        ? t('quota_history.next_reset_account', { name: next.name, when: when(next.reset) })
-        : t('quota_history.no_window'),
-    ]);
-  }
-  const burnLabel =
-    burn.source === 'window'
-      ? t('quota_history.burn_window', { hours: burn.hours })
-      : burn.source === 'weekAverage'
-        ? t('quota_history.burn_week')
-        : burn.source === 'collecting'
-          ? t('quota_history.burn_collecting')
-          : t('quota_history.burn_none');
-  stats.push([burnLabel, `${burn.rate.toFixed(1)}%/h`]);
+    const burnLabel =
+      burn.source === 'window'
+        ? t('quota_history.burn_window', { hours: burn.hours })
+        : burn.source === 'weekAverage'
+          ? t('quota_history.burn_week')
+          : burn.source === 'collecting'
+            ? t('quota_history.burn_collecting')
+            : t('quota_history.burn_none');
+    stats.push([burnLabel, `${burn.rate.toFixed(1)}%/h`]);
+    return { limit, stats };
+  });
 
   const newest = Math.max(0, ...accounts.map((account) => account.sampled ?? 0));
   const ageSeconds = newest ? nowMs / 1000 - newest : 0;
@@ -311,7 +321,11 @@ export function QuotaHistoryCard({ active, refreshing }: Props) {
       ? { stale: true, text: t('quota_history.stale', { age: formatDuration(ageSeconds, t) }) }
       : { stale: false, text: t('quota_history.updated', { age: formatDuration(ageSeconds, t) }) };
 
-  const limitOptions = labels.map((label) => ({ value: label, label: limitDisplayName(label, t) }));
+  const limitOptions = labels.map((label) => ({
+    value: label,
+    label: limitDisplayName(label, t),
+    color: limitColor(label, labels),
+  }));
   const futureLabels: Record<FutureFactor, string> = {
     '1': t('quota_history.future_same'),
     '0.5': t('quota_history.future_half'),
@@ -325,17 +339,13 @@ export function QuotaHistoryCard({ active, refreshing }: Props) {
       {serviceForm}
 
       <div className={styles.controls}>
-        <div className={styles.selectGroup}>
-          <span className={styles.groupName}>{t('quota_history.control_limit')}</span>
-          <Select
-            size="sm"
-            fullWidth={false}
-            value={settings.limit}
-            options={limitOptions}
-            onChange={(limit) => update({ limit })}
-            ariaLabel={t('quota_history.control_limit')}
-          />
-        </div>
+        <Segmented<string>
+          label={t('quota_history.control_limit')}
+          ariaLabel={t('quota_history.control_limit')}
+          values={settings.limits}
+          onChange={(limit) => update({ limits: toggleLimit(settings.limits, limit, labels) })}
+          options={limitOptions}
+        />
         <Segmented<Metric>
           ariaLabel={t('quota_history.metric_remaining')}
           value={settings.metric}
@@ -355,7 +365,7 @@ export function QuotaHistoryCard({ active, refreshing }: Props) {
             label: t('quota_history.hours_short', { n: hours }),
           }))}
         />
-        {model.period && (
+        {model.limits.some((limit) => limit.period) && (
           <div className={styles.selectGroup}>
             <span className={styles.groupName}>{t('quota_history.control_future')}</span>
             <Select
@@ -392,19 +402,29 @@ export function QuotaHistoryCard({ active, refreshing }: Props) {
         />
       </div>
 
-      <div className={styles.summary}>
-        <div className={styles.big}>
-          {Math.round(model.current)}%
-          <small>{t('quota_history.of_left', { total: model.accountCount * 100 })}</small>
-        </div>
-        <dl className={styles.stats}>
-          {stats.map(([name, value]) => (
-            <div key={name} className={styles.stat}>
-              <dt>{name}</dt>
-              <dd>{value}</dd>
+      <div className={styles.summaries}>
+        {rows.map(({ limit, stats }) => (
+          <div key={limit.label} className={multi ? styles.summaryRow : styles.summary}>
+            {multi && (
+              <span className={styles.limitName}>
+                <i className={styles.swatch} style={{ background: limit.color }} />
+                {limitDisplayName(limit.label, t)}
+              </span>
+            )}
+            <div className={multi ? styles.bigCompact : styles.big}>
+              {Math.round(limit.current)}%
+              <small>{t('quota_history.of_left', { total: limit.accountCount * 100 })}</small>
             </div>
-          ))}
-        </dl>
+            <dl className={styles.stats}>
+              {stats.map(([name, value]) => (
+                <div key={name} className={styles.stat}>
+                  <dt>{name}</dt>
+                  <dd>{value}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        ))}
       </div>
 
       {error && (
@@ -416,19 +436,18 @@ export function QuotaHistoryCard({ active, refreshing }: Props) {
       <QuotaHistoryChart model={model} locale={locale} />
 
       <div className={styles.legend}>
-        {model.series
-          .filter((series) => !series.hideLegend)
-          .map((series, index) => (
-            <span key={index} className={styles.legendItem}>
-              <i
-                style={{
-                  borderTopColor: series.color,
-                  borderTopStyle: series.dashed ? 'dashed' : 'solid',
-                }}
-              />
-              {seriesDisplayName(series, t)}
-            </span>
-          ))}
+        {legendItems(model.series, multi, t).map((item, index) => (
+          <span key={index} className={styles.legendItem}>
+            <i
+              style={{
+                borderTopColor: item.color,
+                borderTopStyle: item.dashed ? 'dashed' : 'solid',
+                opacity: item.opacity,
+              }}
+            />
+            {item.text}
+          </span>
+        ))}
         <span className={styles.spacer} />
         {freshness && (
           <span className={freshness.stale ? styles.stale : undefined}>{freshness.text}</span>
