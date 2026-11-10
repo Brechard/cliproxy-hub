@@ -14,6 +14,10 @@ Management API and sets credential priorities (higher wins):
 Running sessions keep their account while session affinity holds (`routing.session-affinity`),
 so priorities only steer new and idle sessions.
 
+It also records every reading to `~/.local/share/cliproxy-reset-router/history.jsonl` (60 days)
+and serves it at `http://127.0.0.1:8318/v1/quota-history?days=N` for the panel's quota history
+chart. That endpoint takes the management key as a bearer token, like the Management API.
+
 It talks only to the Management API on `127.0.0.1:8317` (override with `CLIPROXY_URL`) and uses
 Python 3.9+ stdlib only.
 
@@ -23,5 +27,6 @@ Python 3.9+ stdlib only.
 2. Run `router/install.sh`. It copies the scripts to `~/.local/share/cliproxy-reset-router` and
    loads the `local.cliproxy-reset-router` launchd job.
 
-`python3 reset_router.py --dry-run` prints what it would set without changing anything.
+The job runs `reset_router.py --serve`, which keeps running, routes every 5 minutes and serves
+history. `python3 reset_router.py --dry-run` prints what it would set without changing anything.
 Tests: `cd router && python3 -m unittest`.

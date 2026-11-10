@@ -7,10 +7,12 @@
   <key>ProgramArguments</key>
   <array>
     <string>/usr/bin/python3</string>
+    <string>-u</string>
     <string>__INSTALL_DIR__/reset_router.py</string>
+    <string>--serve</string>
   </array>
-  <key>StartInterval</key>
-  <integer>300</integer>
+  <key>KeepAlive</key>
+  <true/>
   <key>RunAtLoad</key>
   <true/>
   <key>StandardOutPath</key>

@@ -7,6 +7,8 @@ usable account whose weekly window resets soonest. Quota left at a reset is lost
 Running sessions keep their account (session affinity outranks priority).
 
 Talks only to the management API on 127.0.0.1. Never redeems or spends anything.
+With --serve it runs every 5 minutes and serves the recorded quota history to the
+management panel (see history_server.py); without it, it runs once.
 """
 import datetime as dt
 import json
@@ -86,8 +88,7 @@ def read_usage(key, auth_index):
     return json.loads(body) if isinstance(body, str) else body
 
 
-def main():
-    dry_run = "--dry-run" in sys.argv
+def run_once(dry_run=False):
     with open(KEY_FILE) as handle:
         key = handle.read().strip()
     now = dt.datetime.now(dt.timezone.utc)
@@ -114,7 +115,21 @@ def main():
                 five_used, current, target))
         if target != current and not dry_run:
             management(key, "PATCH", "auth-files/fields", {"name": entry["name"], "priority": target})
+    if not dry_run:
+        try:
+            import quota_history
+            quota_history.record(accounts, now, desired)
+        except Exception as error:
+            # History is a view; it must never block routing.
+            print("quota history: %s" % error)
     return 0
+
+
+def main():
+    if "--serve" in sys.argv:
+        import history_server
+        return history_server.serve(run_once)
+    return run_once("--dry-run" in sys.argv)
 
 
 if __name__ == "__main__":
