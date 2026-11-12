@@ -1,6 +1,8 @@
 import datetime as dt
 import unittest
+from unittest import mock
 
+import reset_router
 from reset_router import desired_priorities
 
 NOW = dt.datetime(2026, 11, 6, 12, tzinfo=dt.timezone.utc)
@@ -45,6 +47,60 @@ class DesiredPriorities(unittest.TestCase):
             account("known", weekly=5, weekly_reset=150),
         ], NOW)
         self.assertGreater(result["known"], result["unknown"])
+
+
+class RunOnce(unittest.TestCase):
+    FILES = [
+        {"name": "A.json", "provider": "claude", "auth_index": 1, "priority": 10},
+        {"name": "B.json", "provider": "claude", "auth_index": 2, "priority": 20},
+        {"name": "codex-x.json", "provider": "codex", "auth_index": 3, "priority": 20,
+         "id_token": {"chatgpt_account_id": "acct"}},
+        {"name": "codex-off.json", "provider": "codex", "auth_index": 4, "disabled": True},
+    ]
+
+    def run_with(self, codex_status=200):
+        calls, recorded = [], []
+
+        def management(key, method, path, body=None):
+            calls.append((method, path, body))
+            if path == "auth-files":
+                return {"files": self.FILES}
+            if path == "api-call" and "chatgpt.com" in body["url"]:
+                return {"status_code": codex_status, "body": {"rate_limit": {}}}
+            if path == "api-call":
+                reset = (NOW + dt.timedelta(hours=8 if body["auth_index"] == 1 else 90)).isoformat()
+                return {"status_code": 200, "body": {
+                    "seven_day": {"utilization": 10, "resets_at": reset}}}
+            return {}
+
+        import quota_history
+        with mock.patch.object(reset_router, "management", management), \
+                mock.patch("builtins.open", mock.mock_open(read_data="key")), \
+                mock.patch.object(quota_history, "record",
+                                  lambda accounts, now, priorities: recorded.append(
+                                      (accounts, priorities))):
+            status = reset_router.run_once()
+        return status, calls, recorded
+
+    def test_routes_claude_and_records_codex_without_changing_its_priority(self):
+        status, calls, recorded = self.run_with()
+        self.assertEqual(status, 0)
+        patches = [c[2] for c in calls if c[0] == "PATCH"]
+        self.assertEqual(patches, [{"name": "A.json", "priority": 20},
+                                   {"name": "B.json", "priority": 10}])
+        codex_reads = [c[2] for c in calls if c[1] == "api-call" and "chatgpt" in c[2]["url"]]
+        self.assertEqual(len(codex_reads), 1)
+        self.assertEqual(codex_reads[0]["header"]["Chatgpt-Account-Id"], "acct")
+        accounts, priorities = recorded[0]
+        self.assertEqual([(a["name"], a["provider"]) for a in accounts],
+                         [("A.json", "claude"), ("B.json", "claude"), ("codex-x.json", "codex")])
+        self.assertEqual(priorities["codex-x.json"], 20)
+
+    def test_codex_failure_does_not_block_claude_routing(self):
+        status, calls, recorded = self.run_with(codex_status=401)
+        self.assertEqual(status, 0)
+        self.assertEqual(len([c for c in calls if c[0] == "PATCH"]), 2)
+        self.assertEqual([a["provider"] for a in recorded[0][0]], ["claude", "claude"])
 
 
 if __name__ == "__main__":

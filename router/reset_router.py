@@ -1,10 +1,11 @@
 #!/usr/bin/python3
-"""Soonest-reset-first routing for a local CLIProxyAPI Claude pool.
+"""Soonest-reset-first routing for a local CLIProxyAPI Claude pool, plus Codex usage history.
 
 Every run reads each pooled Claude account's 5-hour and weekly usage through the
 proxy's management API and sets credential priorities so new sessions go to the
 usable account whose weekly window resets soonest. Quota left at a reset is lost.
 Running sessions keep their account (session affinity outranks priority).
+Codex accounts are only read for the history chart; their priorities stay as set.
 
 Talks only to the management API on 127.0.0.1. Never redeems or spends anything.
 With --serve it runs every 5 minutes and serves the recorded quota history to the
@@ -25,6 +26,12 @@ USAGE_HEADERS = {
     "Authorization": "Bearer $TOKEN$",
     "anthropic-beta": "oauth-2025-04-20",
     "User-Agent": "claude-code/2.1.318",
+}
+CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+CODEX_USAGE_HEADERS = {
+    "Authorization": "Bearer $TOKEN$",
+    "Content-Type": "application/json",
+    "User-Agent": "codex-tui",
 }
 
 
@@ -88,20 +95,32 @@ def read_usage(key, auth_index):
     return json.loads(body) if isinstance(body, str) else body
 
 
-def run_once(dry_run=False):
-    with open(KEY_FILE) as handle:
-        key = handle.read().strip()
-    now = dt.datetime.now(dt.timezone.utc)
-    files = [f for f in management(key, "GET", "auth-files")["files"]
-             if f.get("provider") == "claude" and not f.get("disabled")]
+def read_codex_usage(key, entry):
+    """Codex usage for one ChatGPT login. Read-only: never touches reset credits."""
+    id_token = entry.get("id_token") if isinstance(entry.get("id_token"), dict) else {}
+    header = dict(CODEX_USAGE_HEADERS)
+    if id_token.get("chatgpt_account_id"):
+        header["Chatgpt-Account-Id"] = id_token["chatgpt_account_id"]
+    response = management(key, "POST", "api-call", {
+        "auth_index": entry["auth_index"], "method": "GET", "url": CODEX_USAGE_URL, "header": header,
+    })
+    if not 200 <= response.get("status_code", 0) < 300:
+        raise RuntimeError("usage read returned HTTP %s" % response.get("status_code"))
+    body = response.get("body")
+    return json.loads(body) if isinstance(body, str) else body
+
+
+def route_claude(key, files, now, dry_run):
+    """Set Claude priorities. Returns (accounts read, priorities set or None)."""
     accounts = []
     for entry in files:
         try:
-            accounts.append({"name": entry["name"], "usage": read_usage(key, entry["auth_index"])})
+            accounts.append({"name": entry["name"], "provider": "claude",
+                             "usage": read_usage(key, entry["auth_index"])})
         except Exception as error:
             # Ranking on partial data could route away from the right account.
             print("%s: %s; leaving priorities unchanged" % (entry["name"], error))
-            return 1
+            return accounts, None
     desired = desired_priorities(accounts, now)
     for entry in files:
         current = entry.get("priority") or 0
@@ -115,14 +134,44 @@ def run_once(dry_run=False):
                 five_used, current, target))
         if target != current and not dry_run:
             management(key, "PATCH", "auth-files/fields", {"name": entry["name"], "priority": target})
-    if not dry_run:
+    return accounts, desired
+
+
+def read_codex(key, files):
+    """Codex accounts are recorded for the chart only; their priorities are left alone."""
+    accounts = []
+    for entry in files:
         try:
-            import quota_history
-            quota_history.record(accounts, now, desired)
+            accounts.append({"name": entry["name"], "provider": "codex",
+                             "usage": read_codex_usage(key, entry)})
         except Exception as error:
-            # History is a view; it must never block routing.
-            print("quota history: %s" % error)
-    return 0
+            print("%s: %s; not recorded this run" % (entry["name"], error))
+    return accounts
+
+
+def run_once(dry_run=False):
+    with open(KEY_FILE) as handle:
+        key = handle.read().strip()
+    now = dt.datetime.now(dt.timezone.utc)
+    files = [f for f in management(key, "GET", "auth-files")["files"] if not f.get("disabled")]
+    claude, desired = route_claude(
+        key, [f for f in files if f.get("provider") == "claude"], now, dry_run)
+    if dry_run:
+        return 0 if desired is not None else 1
+    try:
+        codex = read_codex(key, [f for f in files if f.get("provider") == "codex"])
+    except Exception as error:
+        print("codex usage: %s" % error)
+        codex = []
+    priorities = dict(desired or {})
+    priorities.update({f["name"]: f.get("priority") for f in files if f.get("provider") == "codex"})
+    try:
+        import quota_history
+        quota_history.record(claude + codex, now, priorities)
+    except Exception as error:
+        # History is a view; it must never block routing.
+        print("quota history: %s" % error)
+    return 0 if desired is not None else 1
 
 
 def main():
