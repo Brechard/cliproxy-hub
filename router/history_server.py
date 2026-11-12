@@ -1,6 +1,8 @@
 """Runs the router every 5 minutes and serves its quota history to the management panel.
 
-GET /v1/quota-history?days=N on 127.0.0.1:8318 returns quota_history.snapshot(). It needs
+GET /v1/quota-history?days=N on 127.0.0.1:8318 returns quota_history.snapshot(). A reverse
+proxy can also publish it on the CLIProxyAPI origin at the same path, which the panel tries
+first. Every response carries X-Quota-History: 1 so the panel can recognize it. It needs
 the proxy's management key as a bearer token, which the panel already holds; CORS is open
 because the key, not the origin, is what grants access.
 """
@@ -20,6 +22,7 @@ from reset_router import KEY_FILE
 HOST = os.environ.get("QUOTA_HISTORY_HOST", "127.0.0.1")
 PORT = int(os.environ.get("QUOTA_HISTORY_PORT", "8318"))
 INTERVAL = 300
+SERVICE_HEADER = "X-Quota-History"
 
 
 def management_key():
@@ -34,6 +37,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "Authorization")
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Expose-Headers", SERVICE_HEADER)
+        # Lets the panel tell this service's 401 apart from another server's at the same path.
+        self.send_header(SERVICE_HEADER, "1")
         self.send_header("Access-Control-Max-Age", "600")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Type", "application/json")
@@ -58,7 +64,7 @@ class Handler(BaseHTTPRequestHandler):
         now = dt.datetime.now(dt.timezone.utc)
         cutoff = (now - dt.timedelta(days=days)).timestamp()
         rows = [r for r in quota_history.load(now) if quota_history.epoch(r["t"]) >= cutoff]
-        self.reply(200, quota_history.snapshot(rows, now))
+        self.reply(200, quota_history.snapshot(rows, now, quota_history.load_names()))
 
     def log_message(self, *args):
         pass

@@ -34,7 +34,54 @@ class Limits(unittest.TestCase):
                          [("5-hour", 16.0), ("Weekly", 97.0)])
 
 
+class CodexLimits(unittest.TestCase):
+    def test_labels_windows_by_length(self):
+        usage = {"rate_limit": {
+            "primary_window": {"used_percent": 1, "limit_window_seconds": 18000,
+                               "reset_at": RESET},
+            "secondary_window": {"used_percent": 17, "limit_window_seconds": 604800,
+                                 "reset_at": RESET},
+        }, "additional_rate_limits": [{"limit_name": "Spark", "rate_limit": {
+            "primary_window": {"used_percent": 3, "limit_window_seconds": 604800},
+            "secondary_window": None}}]}
+        self.assertEqual(
+            [(l["label"], l["percent"], qh.epoch(l["resets_at"])) for l in qh.codex_limits(usage)],
+            [("5-hour", 1, RESET), ("Weekly", 17, RESET), ("Weekly · Spark", 3, None)])
+
+    def test_weekly_only_plan_has_no_5_hour_entry(self):
+        usage = {"rate_limit": {"primary_window": {
+            "used_percent": 71, "limit_window_seconds": 604800, "reset_at": RESET},
+            "secondary_window": None}}
+        self.assertEqual([l["label"] for l in qh.codex_limits(usage)], ["Weekly"])
+
+
 class History(unittest.TestCase):
+    def test_rows_carry_provider_and_old_rows_count_as_claude(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "history.jsonl")
+            with open(path, "w") as handle:
+                handle.write(json.dumps({"t": NOW.isoformat(), "account": "Old", "priority": 5,
+                                         "limits": [{"label": "Weekly", "percent": 9,
+                                                     "resets_at": None}]}) + "\n")
+            codex = {"rate_limit": {"primary_window": {
+                "used_percent": 71, "limit_window_seconds": 604800, "reset_at": RESET}}}
+            qh.record([{"name": "codex-1-a@b.c-plus.json", "provider": "codex", "usage": codex}],
+                      NOW, {"codex-1-a@b.c-plus.json": 20}, path)
+            snapshot = qh.snapshot(qh.load(NOW, path), NOW, {"codex-1-a@b.c-plus": "Greg"})
+            self.assertEqual(
+                [(a["provider"], a["name"], a["priority"]) for a in snapshot["accounts"]],
+                [("claude", "Old", 5), ("codex", "Greg", 20)])
+            self.assertEqual(snapshot["accounts"][1]["series"]["Weekly"],
+                             [[int(NOW.timestamp()), 71, RESET]])
+
+    def test_load_names_ignores_missing_or_bad_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "names.json")
+            self.assertEqual(qh.load_names(path), {})
+            with open(path, "w") as handle:
+                handle.write('{"a": "Greg", "b": 3, "c": ""}')
+            self.assertEqual(qh.load_names(path), {"a": "Greg"})
+
     def test_load_drops_rows_older_than_keep_and_snapshot_groups_series(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "history.jsonl")
@@ -73,12 +120,16 @@ class Server(unittest.TestCase):
     def test_returns_history_with_the_management_key(self):
         headers, body = self.get("secret")
         self.assertEqual(headers["Access-Control-Allow-Origin"], "*")
+        self.assertEqual(headers["X-Quota-History"], "1")
+        self.assertIn("X-Quota-History", headers["Access-Control-Expose-Headers"])
         self.assertEqual(body["accounts"][0]["name"], "A")
 
     def test_rejects_a_wrong_key(self):
         with self.assertRaises(urllib.error.HTTPError) as caught:
             self.get("wrong")
         self.assertEqual(caught.exception.code, 401)
+        self.assertEqual(caught.exception.headers["X-Quota-History"], "1")
+        caught.exception.close()
 
 
 if __name__ == "__main__":

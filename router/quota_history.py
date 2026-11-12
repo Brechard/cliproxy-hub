@@ -1,4 +1,4 @@
-"""Quota history for the CLIProxyAPI Claude pool: one row per account per router run."""
+"""Quota history for the CLIProxyAPI Claude and Codex pools: one row per account per router run."""
 import datetime as dt
 import json
 import os
@@ -8,7 +8,10 @@ from reset_router import parse_time
 
 HISTORY = os.path.expanduser(
     os.environ.get("QUOTA_HISTORY_FILE", "~/.local/share/cliproxy-reset-router/history.jsonl"))
+NAMES = os.path.expanduser(
+    os.environ.get("QUOTA_HISTORY_NAMES", "~/.config/cliproxy-reset-router/names.json"))
 KEEP = dt.timedelta(days=60)
+HOUR = 3600
 LABELS = {"session": "5-hour", "weekly_all": "Weekly"}
 _lock = threading.Lock()
 
@@ -40,16 +43,57 @@ def limits(usage):
     return out
 
 
+def codex_window_label(seconds, suffix=None):
+    if seconds == 5 * HOUR:
+        label = "5-hour"
+    elif seconds == 7 * 24 * HOUR:
+        label = "Weekly"
+    elif seconds and 28 * 24 * HOUR <= seconds <= 31 * 24 * HOUR:
+        label = "Monthly"
+    elif seconds:
+        label = "%dh" % round(seconds / HOUR)
+    else:
+        label = "Window"
+    return "%s · %s" % (label, suffix) if suffix else label
+
+
+def codex_limits(usage):
+    """Normalize ChatGPT /wham/usage into [{label, percent, resets_at}]."""
+    out = []
+
+    def add(rate_limit, suffix=None):
+        for key in ("primary_window", "secondary_window"):
+            window = (rate_limit or {}).get(key)
+            if not isinstance(window, dict) or window.get("used_percent") is None:
+                continue
+            reset = window.get("reset_at")
+            out.append({
+                "label": codex_window_label(window.get("limit_window_seconds"), suffix),
+                "percent": window["used_percent"],
+                "resets_at": dt.datetime.fromtimestamp(reset, dt.timezone.utc).isoformat()
+                if isinstance(reset, (int, float)) else None,
+            })
+
+    add(usage.get("rate_limit"))
+    for extra in usage.get("additional_rate_limits") or []:
+        if isinstance(extra, dict):
+            add(extra.get("rate_limit"), extra.get("limit_name") or extra.get("metered_feature"))
+    return out
+
+
 def account_name(file_name):
     return file_name[:-5] if file_name.endswith(".json") else file_name
 
 
 def record(accounts, now, priorities, path=None):
+    """accounts: [{name, usage, provider}]; provider is "claude" (default) or "codex"."""
     lines = "".join(json.dumps({
         "t": now.isoformat(),
         "account": account_name(account["name"]),
+        "provider": account.get("provider", "claude"),
         "priority": priorities.get(account["name"]),
-        "limits": limits(account["usage"]),
+        "limits": (codex_limits if account.get("provider") == "codex" else limits)(
+            account["usage"]),
     }) + "\n" for account in accounts)
     with _lock, open(path or HISTORY, "a") as handle:
         handle.write(lines)
@@ -83,12 +127,29 @@ def load(now, path=None):
     return rows
 
 
-def snapshot(rows, now):
-    """{now, accounts: [{name, priority, sampled, latest, series: {label: [[t, %, reset]]}}]}"""
+def load_names(path=None):
+    """Optional {account: display name} map, e.g. {"codex-4f70cac2-x@y.com-plus": "Greg"}."""
+    try:
+        with open(path or NAMES) as handle:
+            names = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in names.items() if isinstance(k, str) and isinstance(v, str) and v}
+
+
+def snapshot(rows, now, names=None):
+    """{now, accounts: [{name, provider, priority, sampled, latest, series: {label: [[t, %, reset]]}}]}
+
+    Rows without a provider predate Codex history and are Claude. `names` relabels accounts
+    for display only; rows keep the auth file name so history survives a rename of the label.
+    """
+    names = names or {}
     accounts = {}
     for row in rows:
         t = epoch(row["t"])
-        account = accounts.setdefault(row["account"], {"name": row["account"], "series": {}})
+        provider = row.get("provider") or "claude"
+        account = accounts.setdefault((provider, row["account"]), {
+            "name": names.get(row["account"], row["account"]), "provider": provider, "series": {}})
         account.update(priority=row.get("priority"), sampled=t, latest=[
             {"label": e["label"], "percent": e["percent"], "reset": epoch(e["resets_at"])}
             for e in row["limits"]])
@@ -97,4 +158,4 @@ def snapshot(rows, now):
                 account["series"].setdefault(entry["label"], []).append(
                     [t, entry["percent"], epoch(entry["resets_at"])])
     return {"now": int(now.timestamp()),
-            "accounts": sorted(accounts.values(), key=lambda a: a["name"])}
+            "accounts": sorted(accounts.values(), key=lambda a: (a["provider"], a["name"]))}
