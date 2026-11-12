@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuthStore, useQuotaStore } from '@/stores';
-import { QuotaHistoryError, fetchQuotaHistory, type QuotaHistoryErrorKind } from './api';
+import { QuotaHistoryError, fetchQuotaHistoryFrom, type QuotaHistoryErrorKind } from './api';
 import type { QuotaHistory } from './types';
 
 export const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
@@ -9,7 +9,8 @@ interface Options {
   /** Fetch only while the card is shown. */
   active: boolean;
   days: number;
-  serviceUrl: string;
+  /** Addresses to try in order; the first that answers is used and remembered. */
+  serviceUrls: readonly string[];
   /** True while the Quota page reloads its own data; the falling edge refetches too. */
   refreshing: boolean;
 }
@@ -28,9 +29,10 @@ export interface QuotaHistoryState {
 export function useQuotaHistory({
   active,
   days,
-  serviceUrl,
+  serviceUrls,
   refreshing,
 }: Options): QuotaHistoryState {
+  const serviceUrl = serviceUrls.join(' ');
   const connected = useAuthStore((state) => state.connectionStatus === 'connected');
   const managementKey = useAuthStore((state) => state.managementKey);
   const generation = useQuotaStore((state) => state.cacheGeneration);
@@ -58,8 +60,8 @@ export function useQuotaHistory({
     inFlightRef.current = true;
     setLoading(true);
     try {
-      const history = await fetchQuotaHistory({
-        baseUrl: serviceUrl,
+      const { history } = await fetchQuotaHistoryFrom({
+        baseUrls: serviceUrl.split(' '),
         managementKey,
         days,
         signal: controller.signal,

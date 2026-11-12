@@ -66,10 +66,12 @@ const en = {
   stale: 'Last reading {{age}} ago. Check that the reset router is running.',
   footnote:
     'Recorded every 5 minutes by the reset router. Projections assume the burn rate continues, with new sessions going to the usable account whose weekly limit resets soonest (the router’s rule), and ignore 5-hour limits.',
+  footnote_codex:
+    'Recorded every 5 minutes by the reset router. Projections assume the burn rate continues, with new sessions going to the usable account with the highest priority (Codex priorities are set by hand), and ignore 5-hour limits.',
   service_settings: 'History service address',
   service_url: 'Service URL',
   service_hint:
-    'Defaults to this proxy’s host on port 8318. The panel sends its management key to this address.',
+    'Leave empty to look it up: first this proxy’s own address, then its host on port 8318. The panel sends its management key to this address.',
   service_save: 'Save',
   service_default: 'Use default',
 };
@@ -137,9 +139,12 @@ const zhCN: Bundle = {
   stale: '最近一次读数在 {{age}}前。请确认 reset router 正在运行。',
   footnote:
     '由 reset router 每 5 分钟记录一次。预测假设消耗速度保持不变，新会话分配给每周额度最先重置的可用账号（路由器的规则），并忽略 5 小时限额。',
+  footnote_codex:
+    '由 reset router 每 5 分钟记录一次。预测假设消耗速度保持不变，新会话分配给优先级最高的可用账号（Codex 优先级为手动设置），并忽略 5 小时限额。',
   service_settings: '历史服务地址',
   service_url: '服务地址',
-  service_hint: '默认为此代理所在主机的 8318 端口。面板会把管理密钥发送到该地址。',
+  service_hint:
+    '留空则自动查找：先尝试此代理自身的地址，再尝试其主机的 8318 端口。面板会把管理密钥发送到该地址。',
   service_save: '保存',
   service_default: '使用默认值',
 };
@@ -205,9 +210,12 @@ const zhTW: Bundle = {
   stale: '最近一次讀數在 {{age}}前。請確認 reset router 正在執行。',
   footnote:
     '由 reset router 每 5 分鐘記錄一次。預測假設消耗速度維持不變，新工作階段會分配給每週額度最先重置的可用帳號（路由器的規則），並忽略 5 小時限額。',
+  footnote_codex:
+    '由 reset router 每 5 分鐘記錄一次。預測假設消耗速度維持不變，新工作階段會分配給優先順序最高的可用帳號（Codex 優先順序為手動設定），並忽略 5 小時限額。',
   service_settings: '歷史服務位址',
   service_url: '服務位址',
-  service_hint: '預設為此代理所在主機的 8318 連接埠。面板會把管理金鑰傳送到該位址。',
+  service_hint:
+    '留空則自動尋找：先嘗試此代理本身的位址，再嘗試其主機的 8318 連接埠。面板會把管理金鑰傳送到該位址。',
   service_save: '儲存',
   service_default: '使用預設值',
 };
@@ -273,10 +281,12 @@ const ru: Bundle = {
   stale: 'Последнее показание {{age}} назад. Проверьте, что reset router запущен.',
   footnote:
     'Записывается reset router каждые 5 минут. Прогноз исходит из неизменной скорости расхода: новые сеансы идут на доступный аккаунт, недельный лимит которого сбрасывается раньше всех (правило маршрутизатора); 5-часовые лимиты не учитываются.',
+  footnote_codex:
+    'Записывается reset router каждые 5 минут. Прогноз исходит из неизменной скорости расхода: новые сеансы идут на доступный аккаунт с наивысшим приоритетом (приоритеты Codex задаются вручную); 5-часовые лимиты не учитываются.',
   service_settings: 'Адрес сервиса истории',
   service_url: 'URL сервиса',
   service_hint:
-    'По умолчанию хост этого прокси и порт 8318. Панель отправляет на этот адрес свой ключ управления.',
+    'Оставьте пустым для автоматического поиска: сначала собственный адрес этого прокси, затем его хост на порту 8318. Панель отправляет на этот адрес свой ключ управления.',
   service_save: 'Сохранить',
   service_default: 'По умолчанию',
 };
@@ -342,10 +352,12 @@ const vi: Bundle = {
   stale: 'Số liệu gần nhất cách đây {{age}}. Hãy kiểm tra reset router đang chạy.',
   footnote:
     'Reset router ghi mỗi 5 phút. Dự báo giả định tốc độ tiêu thụ không đổi, phiên mới đi vào tài khoản khả dụng có giới hạn tuần đặt lại sớm nhất (quy tắc của router) và bỏ qua giới hạn 5 giờ.',
+  footnote_codex:
+    'Reset router ghi mỗi 5 phút. Dự báo giả định tốc độ tiêu thụ không đổi, phiên mới đi vào tài khoản khả dụng có mức ưu tiên cao nhất (mức ưu tiên Codex được đặt thủ công) và bỏ qua giới hạn 5 giờ.',
   service_settings: 'Địa chỉ dịch vụ lịch sử',
   service_url: 'URL dịch vụ',
   service_hint:
-    'Mặc định là máy chủ của proxy này, cổng 8318. Bảng điều khiển gửi khóa quản lý tới địa chỉ này.',
+    'Để trống để tự tìm: trước tiên là địa chỉ của chính proxy này, sau đó là máy chủ của nó ở cổng 8318. Bảng điều khiển gửi khóa quản lý tới địa chỉ này.',
   service_save: 'Lưu',
   service_default: 'Dùng mặc định',
 };
@@ -411,9 +423,12 @@ const ko: Bundle = {
   stale: '마지막 기록은 {{age}} 전입니다. reset router가 실행 중인지 확인하세요.',
   footnote:
     'reset router가 5분마다 기록합니다. 예측은 소모 속도가 유지된다고 가정하며, 새 세션은 주간 한도가 가장 먼저 초기화되는 사용 가능한 계정으로 갑니다(라우터 규칙). 5시간 한도는 무시합니다.',
+  footnote_codex:
+    'reset router가 5분마다 기록합니다. 예측은 소비 속도가 유지되고 새 세션이 우선순위가 가장 높은 사용 가능한 계정으로 간다고 가정하며(Codex 우선순위는 수동 설정), 5시간 한도는 무시합니다.',
   service_settings: '기록 서비스 주소',
   service_url: '서비스 URL',
-  service_hint: '기본값은 이 프록시 호스트의 8318 포트입니다. 패널은 이 주소로 관리 키를 보냅니다.',
+  service_hint:
+    '비워 두면 자동으로 찾습니다. 먼저 이 프록시 자체 주소를, 그다음 해당 호스트의 8318 포트를 시도합니다. 패널은 이 주소로 관리 키를 보냅니다.',
   service_save: '저장',
   service_default: '기본값 사용',
 };
@@ -479,10 +494,12 @@ const tr: Bundle = {
   stale: 'Son ölçüm {{age}} önce. Reset router’ın çalıştığını kontrol edin.',
   footnote:
     'Reset router tarafından 5 dakikada bir kaydedilir. Tahmin, tüketim hızının sürdüğünü ve yeni oturumların haftalık limiti en erken sıfırlanan kullanılabilir hesaba gittiğini varsayar (router kuralı); 5 saatlik limitler yok sayılır.',
+  footnote_codex:
+    'Reset router tarafından 5 dakikada bir kaydedilir. Tahmin, tüketim hızının sürdüğünü ve yeni oturumların en yüksek öncelikli kullanılabilir hesaba gittiğini varsayar (Codex öncelikleri elle ayarlanır); 5 saatlik limitler yok sayılır.',
   service_settings: 'Geçmiş hizmeti adresi',
   service_url: 'Hizmet URL’si',
   service_hint:
-    'Varsayılan olarak bu proxy’nin ana makinesi ve 8318 numaralı bağlantı noktasıdır. Panel yönetim anahtarını bu adrese gönderir.',
+    'Otomatik bulmak için boş bırakın: önce bu proxy’nin kendi adresi, sonra ana makinesinin 8318 numaralı bağlantı noktası denenir. Panel yönetim anahtarını bu adrese gönderir.',
   service_save: 'Kaydet',
   service_default: 'Varsayılanı kullan',
 };

@@ -1,12 +1,12 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import iconClaude from '@/assets/icons/claude.svg';
+import iconCodex from '@/assets/icons/codex.svg';
 import { Button } from '@/components/ui/Button';
 import { IconRefreshCw, IconSettings } from '@/components/ui/icons';
 import { Select } from '@/components/ui/Select';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { useAuthStore } from '@/stores';
-import { defaultServiceUrl, normalizeServiceUrl } from './api';
+import type { QuotaHistoryErrorKind } from './api';
 import {
   BURN_HOURS,
   FUTURE_FACTORS,
@@ -30,21 +30,35 @@ import './i18n';
 import { limitLabels } from './model';
 import { limitColor } from './palette';
 import { QuotaHistoryChart } from './QuotaHistoryChart';
-import {
-  readServiceUrlOverride,
-  readStoredSettings,
-  writeServiceUrlOverride,
-  writeStoredSettings,
-} from './storage';
-import { useQuotaHistory } from './useQuotaHistory';
+import { readStoredSettings, writeStoredSettings } from './storage';
+import type { DrainOrder, HistoryProvider, QuotaHistory } from './types';
 import { useNow } from '@/hooks/useNow';
 import styles from './QuotaHistoryCard.module.scss';
 
+const PROVIDERS: Record<HistoryProvider, { name: string; icon: string; drain: DrainOrder }> = {
+  claude: { name: 'Claude', icon: iconClaude, drain: 'soonestReset' },
+  codex: { name: 'Codex', icon: iconCodex, drain: 'priority' },
+};
+
+export interface HistoryServiceControls {
+  /** Saved address, or '' when the panel looks the service up itself. */
+  override: string;
+  /** Shown as the input placeholder: the addresses tried in order. */
+  automatic: string;
+  save: (url: string) => void;
+  reset: () => void;
+}
+
 interface Props {
-  /** Shown only on the All and Claude tabs; hidden cards do not fetch. */
-  active: boolean;
-  /** The Quota page's own reload state, so a header refresh also refreshes the chart. */
-  refreshing: boolean;
+  provider: HistoryProvider;
+  /** The whole history response; the card charts only its provider's accounts. */
+  data: QuotaHistory | null;
+  error: QuotaHistoryErrorKind | null;
+  loading: boolean;
+  reload: () => void;
+  service: HistoryServiceControls;
+  /** Reports the card's history range so the shared request covers it. */
+  onDaysChange: (provider: HistoryProvider, days: number) => void;
 }
 
 const STALE_AFTER_SECONDS = 15 * 60;
@@ -85,65 +99,58 @@ function Segmented<T extends string>({
   );
 }
 
-export function QuotaHistoryCard({ active, refreshing }: Props) {
+export function QuotaHistoryCard({
+  provider,
+  data,
+  error,
+  loading,
+  reload,
+  service,
+  onDaysChange,
+}: Props) {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
-  const apiBase = useAuthStore((state) => state.apiBase);
-  const nowMs = useNow(active);
+  const nowMs = useNow(true);
+  const meta = PROVIDERS[provider];
 
-  const [override, setOverride] = useState(readServiceUrlOverride);
   const [draftUrl, setDraftUrl] = useState('');
   const [editingService, setEditingService] = useState(false);
-  const serviceUrl = useMemo(
-    () => override || defaultServiceUrl(apiBase, window.location),
-    [apiBase, override]
+  const [stored, setStored] = useState<unknown>(() => readStoredSettings(provider));
+
+  const accounts = useMemo(
+    () => (data?.accounts ?? []).filter((account) => account.provider === provider),
+    [data, provider]
   );
-
-  const [stored, setStored] = useState<unknown>(readStoredSettings);
-  const [days, setDays] = useState(() => sanitizeSettings(readStoredSettings(), []).historyDays);
-
-  const { data, error, loading, reload } = useQuotaHistory({
-    active,
-    days,
-    serviceUrl,
-    refreshing,
-  });
-
-  const accounts = useMemo(() => data?.accounts ?? [], [data]);
   const settings = useMemo(() => sanitizeSettings(stored, accounts), [stored, accounts]);
   const labels = useMemo(() => limitLabels(accounts), [accounts]);
   const model = useMemo(
-    () => (data ? buildChartModel({ accounts, now: data.now, settings }) : null),
-    [data, accounts, settings]
+    () => (data ? buildChartModel({ accounts, now: data.now, settings, drain: meta.drain }) : null),
+    [data, accounts, settings, meta.drain]
   );
 
   const update = useCallback(
     (patch: Partial<ChartSettings>) => {
       const next = { ...settings, ...patch };
       setStored(next);
-      writeStoredSettings(next);
-      if (patch.historyDays !== undefined) setDays(patch.historyDays);
+      writeStoredSettings(provider, next);
+      if (patch.historyDays !== undefined) onDaysChange(provider, patch.historyDays);
     },
-    [settings]
+    [settings, provider, onDaysChange]
   );
 
   const saveService = () => {
-    writeServiceUrlOverride(draftUrl);
-    setOverride(normalizeServiceUrl(draftUrl));
+    service.save(draftUrl);
     setEditingService(false);
   };
   const resetService = () => {
-    writeServiceUrlOverride('');
-    setOverride('');
+    service.reset();
     setDraftUrl('');
     setEditingService(false);
   };
   const toggleService = () => {
-    setDraftUrl(override);
+    setDraftUrl(service.override);
     setEditingService((open) => !open);
   };
-
-  if (!active) return null;
 
   const settingsButton = (
     <button
@@ -171,7 +178,7 @@ export function QuotaHistoryCard({ active, refreshing }: Props) {
         <input
           className="input"
           value={draftUrl}
-          placeholder={defaultServiceUrl(apiBase, window.location)}
+          placeholder={service.automatic}
           onChange={(event) => setDraftUrl(event.target.value)}
           spellCheck={false}
           autoComplete="off"
@@ -191,8 +198,8 @@ export function QuotaHistoryCard({ active, refreshing }: Props) {
 
   const header = (
     <div className={styles.head}>
-      <img className={styles.providerIcon} src={iconClaude} alt="" />
-      <span className={styles.providerName}>Claude</span>
+      <img className={styles.providerIcon} src={meta.icon} alt="" />
+      <span className={styles.providerName}>{meta.name}</span>
       <span className={styles.muted}>
         {t('quota_history.title')}
         {model
@@ -463,7 +470,9 @@ export function QuotaHistoryCard({ active, refreshing }: Props) {
           <IconRefreshCw size={14} />
         </button>
       </div>
-      <p className={styles.footnote}>{t('quota_history.footnote')}</p>
+      <p className={styles.footnote}>
+        {t(provider === 'codex' ? 'quota_history.footnote_codex' : 'quota_history.footnote')}
+      </p>
     </section>
   );
 }

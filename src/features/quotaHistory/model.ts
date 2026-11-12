@@ -7,6 +7,7 @@
 import type {
   AccountState,
   BurnRate,
+  DrainOrder,
   Gain,
   HistoryAccount,
   Line,
@@ -213,21 +214,29 @@ export function latestState(
         rem = 100;
       }
     }
-    states.push({ name: account.name, color: colorFor(index), rem, reset });
+    states.push({
+      name: account.name,
+      color: colorFor(index),
+      rem,
+      reset,
+      priority: account.priority,
+    });
   });
   return states;
 }
 
 /**
- * Drain `rate` %/h from the account whose weekly window resets soonest, refilling
- * each account to 100% at its reset. Steps every 15 minutes.
+ * Drain `rate` %/h from one account at a time, refilling each to 100% at its reset. With
+ * `soonestReset` the account whose weekly window resets soonest goes first; with `priority`
+ * the highest priority does, ties broken by soonest reset. Steps every 15 minutes.
  */
 export function project(
   states: readonly AccountState[],
   period: number | null,
   rate: number,
   now: number,
-  end: number
+  end: number,
+  drain: DrainOrder = 'soonestReset'
 ): Projection {
   const accs = states.map((state) => ({ ...state, pts: [{ t: now, v: state.rem }] }));
   const total = () => accs.reduce((sum, acc) => sum + acc.rem, 0);
@@ -254,7 +263,11 @@ export function project(
     let need = (rate * step) / HOUR;
     const draining = accs
       .filter((acc) => acc.rem > 0)
-      .sort((a, b) => (a.reset ?? Infinity) - (b.reset ?? Infinity));
+      .sort(
+        (a, b) =>
+          (drain === 'priority' ? (b.priority ?? 0) - (a.priority ?? 0) : 0) ||
+          (a.reset ?? Infinity) - (b.reset ?? Infinity)
+      );
     for (const acc of draining) {
       if (need <= 0) break;
       const take = Math.min(acc.rem, need);
