@@ -2,9 +2,12 @@
 
 import { normalizeServiceUrl } from './api';
 import type { ChartSettings } from './chartModel';
+import type { HistoryProvider } from './types';
 
 const SERVICE_URL_KEY = 'quotaHistory.serviceUrl';
-const SETTINGS_KEY = 'quotaHistory.settings';
+/** Claude keeps the original key so existing chart settings carry over. */
+const settingsKey = (provider: HistoryProvider) =>
+  provider === 'claude' ? 'quotaHistory.settings' : `quotaHistory.settings.${provider}`;
 
 const read = (key: string): string | null => {
   try {
@@ -32,8 +35,8 @@ export const writeServiceUrlOverride = (url: string) => {
   write(SERVICE_URL_KEY, normalized || null);
 };
 
-export const readStoredSettings = (): unknown => {
-  const raw = read(SETTINGS_KEY);
+export const readStoredSettings = (provider: HistoryProvider): unknown => {
+  const raw = read(settingsKey(provider));
   if (!raw) return null;
   try {
     return JSON.parse(raw) as unknown;
@@ -42,5 +45,5 @@ export const readStoredSettings = (): unknown => {
   }
 };
 
-export const writeStoredSettings = (settings: ChartSettings) =>
-  write(SETTINGS_KEY, JSON.stringify(settings));
+export const writeStoredSettings = (provider: HistoryProvider, settings: ChartSettings) =>
+  write(settingsKey(provider), JSON.stringify(settings));

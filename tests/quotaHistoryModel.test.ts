@@ -28,6 +28,7 @@ import type { AccountState, HistoryAccount, SeriesPoint } from '../src/features/
 
 const account = (name: string, series: Record<string, SeriesPoint[]>): HistoryAccount => ({
   name,
+  provider: 'claude',
   priority: null,
   sampled: null,
   latest: [],
@@ -202,6 +203,17 @@ describe('project', () => {
     expect(result.poolEmpty).toBeNull();
     const soon = result.accs.find((a) => a.name === 'soon');
     expect(soon?.reset).toBe(now + 10 * HOUR + WEEK);
+  });
+
+  test('priority drain empties the highest-priority account first, whatever its reset', () => {
+    const states = [
+      { ...state('jeanne', 60, 10 * HOUR), priority: 10 },
+      { ...state('greg', 60, 50 * HOUR), priority: 20 },
+    ];
+    const byPriority = project(states, WEEK, 10, now, now + 8 * HOUR, 'priority');
+    expect(byPriority.firstEmpty).toEqual({ t: now + 6 * HOUR, name: 'greg' });
+    const bySoonest = project(states, WEEK, 10, now, now + 8 * HOUR);
+    expect(bySoonest.firstEmpty).toEqual({ t: now + 6 * HOUR, name: 'jeanne' });
   });
 
   test('reports when the whole pool runs dry', () => {

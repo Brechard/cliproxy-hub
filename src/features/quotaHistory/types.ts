@@ -7,8 +7,12 @@ export interface LatestLimit {
   reset: number | null;
 }
 
+/** Providers the reset router records. Rows from routers older than Codex history are Claude. */
+export type HistoryProvider = 'claude' | 'codex';
+
 export interface HistoryAccount {
   name: string;
+  provider: HistoryProvider;
   priority: number | null;
   sampled: number | null;
   latest: LatestLimit[];
@@ -44,6 +48,8 @@ export interface Gain {
 export interface AccountState {
   name: string;
   color: string;
+  /** Credential priority when the reading was taken; higher gets new sessions first. */
+  priority?: number | null;
   rem: number;
   reset: number | null;
 }
@@ -59,6 +65,12 @@ export interface Projection {
   firstEmpty: { t: number; name: string } | null;
   poolEmpty: number | null;
 }
+
+/**
+ * Which account a projection drains first: Claude's router sends new sessions to the
+ * account whose weekly window resets soonest; Codex keeps fixed priorities.
+ */
+export type DrainOrder = 'soonestReset' | 'priority';
 
 export type BurnSource = 'window' | 'weekAverage' | 'collecting' | 'none';
 

@@ -1,10 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import {
   QuotaHistoryError,
+  clearPreferredServiceUrls,
   defaultServiceUrl,
   fetchQuotaHistory,
+  fetchQuotaHistoryFrom,
   normalizeServiceUrl,
   parseQuotaHistory,
+  serviceUrlCandidates,
 } from '../src/features/quotaHistory/api';
 import { QUOTA_HISTORY_BUNDLES } from '../src/features/quotaHistory/i18n';
 import i18n from '../src/i18n/index';
@@ -48,6 +51,26 @@ describe('service address', () => {
     );
   });
 
+  test('tries the proxy origin first, then its host on port 8318', () => {
+    const at = (href: string) => {
+      const url = new URL(href);
+      return { protocol: url.protocol, hostname: url.hostname, origin: url.origin };
+    };
+    // Tailscale Funnel: only 8443 is public, so the same-origin path is the one that works.
+    const funnel = 'https://omarchy.example.ts.net:8443';
+    expect(serviceUrlCandidates(funnel, at(`${funnel}/management.html`))).toEqual([
+      funnel,
+      'https://omarchy.example.ts.net:8318',
+    ]);
+    expect(serviceUrlCandidates('', at('https://omarchy.example.ts.net/management.html'))).toEqual([
+      'https://omarchy.example.ts.net',
+      'https://omarchy.example.ts.net:8318',
+    ]);
+    expect(
+      serviceUrlCandidates('http://127.0.0.1:8317', at('http://127.0.0.1:8317/management.html'))
+    ).toEqual(['http://127.0.0.1:8317', 'http://127.0.0.1:8318']);
+  });
+
   test('normalizes user overrides', () => {
     expect(normalizeServiceUrl(' 10.0.0.2:8318/ ')).toBe('http://10.0.0.2:8318');
     expect(normalizeServiceUrl('https://h.example')).toBe('https://h.example');
@@ -66,6 +89,21 @@ describe('parseQuotaHistory', () => {
       ],
     });
     expect(parsed.accounts[0].latest).toEqual([{ label: 'Weekly', percent: 12, reset: 5000 }]);
+  });
+
+  test('reads the provider, treats a missing one as Claude and skips unknown ones', () => {
+    const parsed = parseQuotaHistory({
+      now: 1,
+      accounts: [
+        { name: 'Old', series: {} },
+        { name: 'Greg', provider: 'codex', series: {} },
+        { name: 'X', provider: 'gemini', series: {} },
+      ],
+    });
+    expect(parsed.accounts.map((a) => [a.name, a.provider])).toEqual([
+      ['Old', 'claude'],
+      ['Greg', 'codex'],
+    ]);
   });
 
   test('rejects a body that is not a history response', () => {
@@ -130,6 +168,69 @@ describe('fetchQuotaHistory', () => {
       signal: controller.signal,
     }).catch((err: unknown) => err);
     expect(error).not.toBeInstanceOf(QuotaHistoryError);
+  });
+});
+
+describe('fetchQuotaHistoryFrom', () => {
+  const ORIGIN = 'https://proxy.example:8443';
+  const PORT = 'https://proxy.example:8318';
+  type Reply = number | 'down' | { status: number; signed: boolean };
+  const server = (replies: Record<string, Reply>) => {
+    const seen: string[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const base = new URL(String(input)).origin;
+      seen.push(base);
+      const reply = replies[base];
+      if (reply === undefined || reply === 'down') throw new TypeError('Failed to fetch');
+      const { status, signed } =
+        typeof reply === 'number' ? { status: reply, signed: true } : reply;
+      return new Response(status === 200 ? JSON.stringify(payload) : '', {
+        status,
+        headers: signed ? { 'X-Quota-History': '1' } : {},
+      });
+    }) as unknown as typeof fetch;
+    return { seen, fetchImpl };
+  };
+  const run = (fetchImpl: typeof fetch) =>
+    fetchQuotaHistoryFrom({ baseUrls: [ORIGIN, PORT], managementKey: KEY, days: 1, fetchImpl });
+
+  test('falls back to port 8318 when the origin does not serve history, and remembers it', async () => {
+    clearPreferredServiceUrls();
+    const { seen, fetchImpl } = server({ [ORIGIN]: { status: 404, signed: false }, [PORT]: 200 });
+    expect((await run(fetchImpl)).baseUrl).toBe(PORT);
+    expect(seen).toEqual([ORIGIN, PORT]);
+    seen.length = 0;
+    await run(fetchImpl);
+    expect(seen).toEqual([PORT]);
+  });
+
+  test('uses the origin when it answers', async () => {
+    clearPreferredServiceUrls();
+    const { seen, fetchImpl } = server({ [ORIGIN]: 200 });
+    expect((await run(fetchImpl)).baseUrl).toBe(ORIGIN);
+    expect(seen).toEqual([ORIGIN]);
+  });
+
+  test('a 401 signed by the router stops the search', async () => {
+    clearPreferredServiceUrls();
+    const { seen, fetchImpl } = server({ [ORIGIN]: 401, [PORT]: 200 });
+    const error = await run(fetchImpl).catch((err: unknown) => err);
+    expect((error as QuotaHistoryError).kind).toBe('unauthorized');
+    expect(seen).toEqual([ORIGIN]);
+  });
+
+  test('an unsigned 401 is another server, unless no later address answers', async () => {
+    clearPreferredServiceUrls();
+    const unsigned = { status: 401, signed: false };
+    expect((await run(server({ [ORIGIN]: unsigned, [PORT]: 200 }).fetchImpl)).baseUrl).toBe(PORT);
+    clearPreferredServiceUrls();
+    const lastRejects = await run(server({ [ORIGIN]: 'down', [PORT]: unsigned }).fetchImpl).catch(
+      (err: unknown) => err
+    );
+    expect((lastRejects as QuotaHistoryError).kind).toBe('unauthorized');
+    clearPreferredServiceUrls();
+    const allDown = await run(server({}).fetchImpl).catch((err: unknown) => err);
+    expect((allDown as QuotaHistoryError).kind).toBe('unavailable');
   });
 });
 

@@ -16,6 +16,7 @@ import { accountColor, accountOpacity, limitColor } from './palette';
 import type {
   AccountState,
   BurnRate,
+  DrainOrder,
   HistoryAccount,
   Line,
   Projection,
@@ -108,9 +109,16 @@ export interface BuildInput {
   accounts: readonly HistoryAccount[];
   now: number;
   settings: ChartSettings;
+  /** Defaults to the Claude router's soonest-reset rule. */
+  drain?: DrainOrder;
 }
 
-export function buildChartModel({ accounts, now, settings }: BuildInput): ChartModel {
+export function buildChartModel({
+  accounts,
+  now,
+  settings,
+  drain = 'soonestReset',
+}: BuildInput): ChartModel {
   const { limits: selected, burnHours, historyDays } = settings;
   const factor = Number(settings.future);
   const multi = selected.length > 1;
@@ -134,7 +142,7 @@ export function buildChartModel({ accounts, now, settings }: BuildInput): ChartM
     });
     const burn = burnRate(accounts, label, burnHours, now);
     const states = latestState(accounts, label, now, accountColor);
-    const projection = period ? project(states, period, burn.rate * factor, now, x1) : null;
+    const projection = period ? project(states, period, burn.rate * factor, now, x1, drain) : null;
     const lines = entries.map((entry) => entry.line);
     return { label, period, color, entries, lines, burn, states, projection };
   });
